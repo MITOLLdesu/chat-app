@@ -1,0 +1,9 @@
+{
+  "name": "chat-app",
+  "version": "0.1",
+  "description": "this is a chat application built as a test assignment for ForaSoft",
+  "dependencies": {
+    "express": "^4.16.4",
+    "socket.io": "^2.2.0"
+  }
+}

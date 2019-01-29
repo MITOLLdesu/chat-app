@@ -1,0 +1,236 @@
+<html>
+  <head>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://unpkg.com/react@16/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@16/umd/react-dom.development.js" crossorigin></script>
+    <title>Chat App</title>
+    <!-- don't mind all this, CSS is not my strong suit -->
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { font: 20px Helvetica, Arial; }
+      #mainArea { left: 0; }
+      .form { background: #808080; border-radius: 10px; padding: 5px; position: fixed; bottom: 0; width: calc(100% - 200px) }
+      .form input { border: 0; padding: 10px; width: 70%; margin-right: .5%; border-radius: 10px; }
+      .form button { width: 14%; background: #FFEBCD; border: none; padding: 8px; border-radius: 10px; margin: 2px }
+      #messages { list-style-type: none; margin: 0; padding: 0; width: calc(100% - 250px); position: fixed; bottom: 50px }
+      #messages li { padding: 5px 10px; margin: 5px; background: #90EE90; display: table; border-radius: 10px }
+      #messages li.mymsg { background: #00BFFF }
+      .name { font-size: 16px }
+      .date { font-size: 12px; color: #FFFFFF; margin: 0px 0px 0px 5px }
+      #members { width: 200px; height: 100%; right: 0; border-style: solid; border-width: 0px 0px 0px 2px; position: fixed; z-index: 1; font: 16px Helvetica, Arial }
+      #member-list { list-style-type: none }
+      #member-list li { align: center; background: #FFEBCD; padding: 5px; margin: 5px; border-radius: 10px }
+      #listTitle { align: center; text-align: center; background: #C0C0C0; border-radius: 10px; padding: 5px; margin: 5px 2px 5px 2px; }
+      #welcome { position: fixed; top: 50%; left: 50%; height: 150px; width: 300px; margin: -75px 0px 0px -150px; padding: 50px 0px 0px 50px;
+                border-style: solid; border-width: 5px; border-radius: 10px; border-color: #808080;
+      }
+      #welcome div, form, input, button { display: inline; float: none; }
+      video { width: 180px; height: 180px }
+    </style>
+  </head>
+  <body>
+    <!-- the only DOM element we have initially is this div, everything else is created with React -->
+    <div id='root'></div>
+    <script>
+      var socket = io();                                                        // initial setup
+      const re = React.createElement;                                           // this is just a convenient shortcut
+      var nickname = '';                                                            // some global variables we will use later
+      var buffer;
+      var hasVideo = false;
+      var hasAudio = false;
+      var isTransmittingMedia = false;
+      const url = window.location.pathname.substr(1);                           // storing requested chatroom id in a constant
+
+    //--------------------------------------------------------------------         setting up React classes
+
+      class Welcome extends React.Component {                                   // this is a class for the welcome field (entering username)
+        constructor(props) {                                                    // setting up a state for the class
+          super(props);
+          this.state = {value: ''};
+          this.handleChange = this.handleChange.bind(this);                     // binding "this" to the functions below
+          this.handleSubmit = this.handleSubmit.bind(this);
+        }
+
+        handleChange(e){                                                        // on every change in the input field,
+          this.setState({value: e.target.value});                               // we set the internal state of "value" to whatever is currently in the input field
+        }
+
+        handleSubmit(e){                                                        // on submitting the form,
+          e.preventDefault();                                                   // we prevent the page from reloading
+          socket.emit('joinroom', url, this.state.value);                       // and then attempt to join a room with a desired username (if the room wasn't specified, url will just be an empty string)
+        }
+
+        render(){                                                               // on render call, draw a bunch of DOM elements
+          return(
+              re('div', {id: "welcome"},                                        // (this is all pretty much self-explanatory)
+                re('div', null, 'Enter a nickname'),
+                re('form', {onSubmit: this.handleSubmit},
+                  re('input', {id: 'nickname', autoComplete: 'off', autoFocus: true, value: this.state.value, onChange: this.handleChange}),
+                  re('button', {id: 'submit'}, 'Submit'),
+                ),
+              )
+          );
+        }
+      }
+
+      class ChatRoom extends React.Component {                                  // this is a class that builds most of the chat room
+        render(){
+          return(
+              re('div', null,
+                re('div', {id: 'mainArea'},
+                  re('ul', {id: 'messages'}),                                   // a list to put received messages in,
+                  re(MessageField)                                              // in input form for typing outcoming messages,
+                ),
+                re('div', {id: 'members'},
+                  re('div', {id: 'listTitle'}, 'People in this chat:'),
+                  re('div', {id: 'listArea'})                                   // and a block for the member list
+                )
+              )
+          );
+        }
+      }
+
+      class MessageField extends React.Component {                              // this is a class for the user controls (typing and sending messages and starting/ending a media stream)
+        constructor(props) {                                                    // setting up a state for the class
+          super(props);
+          this.state = {value: '', webcambutton: 'Stream'};
+          this.handleChange = this.handleChange.bind(this);
+          this.handleSubmit = this.handleSubmit.bind(this);
+          this.handleWebcam = this.handleWebcam.bind(this);
+        }
+
+        handleChange(e){                                                        // on every change in the input field,
+          this.setState({value: e.target.value});                               // we set the internal state of "value" to whatever is currently in the input field
+        }
+
+        handleSubmit(e){                                                        // on submitting the form
+          e.preventDefault();                                                   // we prevent the page from reloading
+          if (this.state.value) {                                               // if the input field is not empty,
+            socket.emit('chat message', this.state.value);                      // we send the message to the server,
+            let newMsg = document.createElement('li');                          // create a new DOM element for the message,
+            let time = new Date(Date.now()).toLocaleString();                   // create a timestamp,
+            newMsg.innerHTML = '<div class="name">' + nickname + '   <span class="date">' + time + '</span></div>' + this.state.value;
+                                                                                // put the name, the timestamp and the message in the element created earlier,
+            document.getElementById('messages').appendChild(newMsg).setAttribute('class','mymsg');
+                                                                                // put the element in the list of messages and stylize it,
+            let newState = this.state;                                          // and clear the input field (along with the state)
+            newState.value = '';
+            this.setState(newState);
+          };
+        }
+
+        handleWebcam(e){                                                        // on clicking the "Stream/End stream" button,
+          if (!isTransmittingMedia) {                                           // we check if the stream is going right now
+            isTransmittingMedia = true;                                         // if not, we change the corresponding flag
+            Call();                                                             // and start the media stream
+          } else {                                                              // otherwise,
+            isTransmittingMedia = false;                                        // we change the flag back to "false"
+          };                                                                    // finally,
+          let newState = this.state;                                            // we change the text on the button appropriately
+          newState.webcambutton = (newState.webcambutton == 'Stream') ? 'End stream' : 'Stream';
+          this.setState(newState);
+        }
+
+        render(){                                                               // drawing DOM elements on render call
+          return(
+            re('div', {className: 'form'},
+            re('form', {onSubmit: this.handleSubmit},
+              re('input', {id: 'm', autoComplete: 'off', autoFocus: true, value: this.state.value, onChange: this.handleChange}),
+              re('button', {id: 'send'}, "Send"),
+            ),
+            re('button', {onClick: this.handleWebcam}, this.state.webcambutton)
+            )
+          );
+        }
+      }
+
+      function BuildMemberList(members){                                        // this function updates the list of members in the chat (gets an array of member names as a parameter)
+        let list = members.map(function(e){                                     // mapping a new array out of the existing one
+          let videoname = e + '-video';                                         // creating a string to set the id property
+          return re('li', null,                                                 // creating a list entry that contains
+            re('div', null, e),                                                 // the name of a chat member,
+            re('video', {autoPlay: true, hidden: true, controls: false, id: videoname}),  // and a video element to put a potential stream into (initially hidden)
+          );
+        });
+        ReactDOM.render(
+          re('ul', {id: 'member-list'}, list),                                  // render a list using the array of DOM elements
+          document.getElementById('listArea')                                   // and put it in the appropriate block
+        );
+      }
+
+    //--------------------------------------------------------------------         handling socket events from the server
+
+      socket.on('joinroomconf', function(name, room, members){                   // this is called when a user successfully joins a room (contains the room id and the list of members in the room)
+        nickname = name;
+        ReactDOM.render(
+          re(ChatRoom),                                                         // render a chatroom in place of welcome screen
+          document.getElementById('root')
+        );
+        BuildMemberList(members);                                               // call the function to update the list of members
+        if (!url) window.history.replaceState(null, '', window.location.href + room);  // if the user didn't specify a room, we change the contains of his address bar accordingly (thankfully, replaceState does not redirect)
+        navigator.mediaDevices.getUserMedia({video: true}).then(function(){hasVideo = true});  // check if the user gave access to his webcam
+        navigator.mediaDevices.getUserMedia({audio: true}).then(function(){hasAudio = true});  // and/or mic, and set the global flags accordingly (both false by default)
+      });
+
+      socket.on('nameTaken', function(room){                                    // this is called if the server finds the desired username in the list of existing members
+        alert("This nickname is already taken. Try another!");                  // inform the user of this unfortunate fact
+      });
+
+      socket.on('memberUpdate', function(members){                              // this is called when the server gives an updated list of chat members
+        BuildMemberList(members);                                               // call the function to update the list of members
+      });
+
+      socket.on('chat message', function(name, msg, time){                      // this is called when a chat message is received from the server (contains the sender's nickname, the message itself and a timestamp)
+        let newMsg = document.createElement('li');                              // create a new DOM element for the message,
+        newMsg.innerHTML = '<div class="name">' + name + '   <span class="date">' + time + '</span></div>' + msg;
+                                                                                // put the received data in it,
+        document.getElementById('messages').appendChild(newMsg);                // and append the element to the list of messages
+      });
+
+    //--------------------------------------------------------------------         audio/video stream support (it's not a very good implementation, but it's the best I could come up with)
+
+      function Call(){                                                          // this function handles the start of a media stream
+        try {
+          if (!hasAudio && !hasVideo) throw "No webcam or microphone detected! Check if you've allowed this webpage to access them, then try again."
+                                                                                // throw an error if there's no access to both webcam and mic
+        } catch(e) {
+          alert(e);                                                             // and display it
+        };
+        navigator.mediaDevices.getUserMedia({audio: hasAudio, video: hasVideo}) // gain access to webcam/mic according to the global flags
+          .then(function(mediaStream) {
+            buffer = new MediaRecorder(mediaStream);                            // put a MediaRecorder object into a global variable
+            buffer.addEventListener('dataavailable', SendMedia);                // add listener that fires when the recording stops and calls the SendMedia function
+            StartRecording();                                                   // start the recording
+          })
+          .catch(function(err) { console.log(err); });                          // this is just an error catcher
+      }
+
+      function StartRecording(){                                                // this function
+        buffer.start();                                                         // starts recording media
+        setTimeout(function(){
+          buffer.stop();                                                        // and stops after a second (an optimal compromise between latency and the amount of stuttering)
+        }, 1000);
+      }
+
+      function SendMedia(e){                                                    // this function is called when the recording stops (contains a media blob)
+        socket.emit('media', e.data, hasVideo, isTransmittingMedia);            // send the media blob (just the data), and two flags that tell whether there's a video data and if the stream is still going
+        if (isTransmittingMedia) StartRecording();                              // if the user didn't stop the stream, start the recording again
+      }
+
+      socket.on('media', function(data, name, has_video, isTransmitting){       // this is called when the server transmits a chunk of someone's stream (contains the media data as an ArrayBuffer, the sender's name,
+                                                                                // and two flags flag that tell if there's a video data and whether the stream is still going)
+        let media = new Blob([new Uint8Array(data)]);                           // build a blob from an ArrayBuffer
+        let videoId = name + '-video';                                          // build a string to access the appropriate DOM element
+        if (has_video) document.getElementById(videoId).hidden = false;         // if there's a video data, remove the "hidden" attribute from the element
+        document.getElementById(videoId).src = URL.createObjectURL(media);      // put the data in the appropriate DOM element
+        if (!isTransmitting) document.getElementById(videoId).hidden = true;    // if the stream has been stopped, hide the "video" element
+      });
+
+      ReactDOM.render(                                                          // render welcome screen upon loading the page
+        re(Welcome),
+        document.getElementById('root')
+      );
+
+    </script>
+  </body>
+</html>
