@@ -160,8 +160,8 @@
 
     //--------------------------------------------------------------------         handling socket events from the server
 
-      socket.on('joinroomconf', function(name, room, members){                   // this is called when a user successfully joins a room (contains the room id and the list of members in the room)
-        nickname = name;
+      socket.on('joinroomconf', function(name, room, members){                  // this is called when a user successfully joins a room (contains the username, the room id and the list of members in the room)
+        nickname = name;                                                        // store username in a global variable
         ReactDOM.render(
           re(ChatRoom),                                                         // render a chatroom in place of welcome screen
           document.getElementById('root')
